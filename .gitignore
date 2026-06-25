@@ -67,3 +67,18 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
+
+# Agent scratch / reference repos (Phase 4 clones frontend-sdl-cpp here, etc.)
+user_scratch/
+
+# Agent runtime logs — never commit run output
+.agent/logs/*.log
+
+# CPM.cmake module — fetched at configure time, not the committed shim
+cmake/CPM.cmake.module
+
+# Local secrets / credentials (Phase 3) — must NEVER be committed
+credentials.json
+*.token
+*.cookie
+.env

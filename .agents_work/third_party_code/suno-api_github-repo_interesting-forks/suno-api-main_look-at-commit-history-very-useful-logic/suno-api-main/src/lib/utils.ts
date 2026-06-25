@@ -1,0 +1,116 @@
+import pino from "pino";
+import { Page } from "rebrowser-playwright-core";
+
+const logger = pino();
+
+/**
+ * Pause for a specified number of seconds.
+ * @param x Minimum number of seconds.
+ * @param y Maximum number of seconds (optional).
+ */
+export const sleep = (x: number, y?: number): Promise<void> => {
+  let timeout = x * 1000;
+  if (y !== undefined && y !== x) {
+    const min = Math.min(x, y);
+    const max = Math.max(x, y);
+    timeout = Math.floor(Math.random() * (max - min + 1) + min) * 1000;
+  }
+  // console.log(`Sleeping for ${timeout / 1000} seconds`);
+  logger.info(`Sleeping for ${timeout / 1000} seconds`);
+
+  return new Promise(resolve => setTimeout(resolve, timeout));
+}
+
+/**
+ * @param target A Locator or a page
+ * @returns {boolean} 
+ */
+export const isPage = (target: any): target is Page => {
+  return target.constructor.name === 'Page';
+}
+
+/**
+ * Waits for hCaptcha image/challenge network activity to settle.
+ * @param page
+ * @param signal `const controller = new AbortController(); controller.abort()`
+ * @param waitMs Max time to wait for the first matching request
+ */
+export const waitForRequests = (page: Page, signal: AbortSignal, waitMs = 120000): Promise<void> => {
+  return new Promise((resolve, reject) => {
+    // Suno proxies hCaptcha via hcaptcha-*-prod.suno.com, not only hcaptcha.com
+    const urlPattern = /hcaptcha/i;
+    let timeoutHandle: NodeJS.Timeout | null = null;
+    let activeRequestCount = 0;
+    let requestOccurred = false;
+
+    const cleanupListeners = () => {
+      page.off('request', onRequest);
+      page.off('requestfinished', onRequestFinished);
+      page.off('requestfailed', onRequestFinished);
+    };
+
+    const resetTimeout = () => {
+      if (timeoutHandle)
+        clearTimeout(timeoutHandle);
+      if (activeRequestCount === 0) {
+        timeoutHandle = setTimeout(() => {
+          cleanupListeners();
+          resolve();
+        }, 1000);
+      }
+    };
+
+    const onRequest = (request: { url: () => string }) => {
+      if (urlPattern.test(request.url())) {
+        requestOccurred = true;
+        activeRequestCount++;
+        if (timeoutHandle)
+          clearTimeout(timeoutHandle);
+      }
+    };
+
+    const onRequestFinished = (request: { url: () => string }) => {
+      if (urlPattern.test(request.url())) {
+        activeRequestCount--;
+        resetTimeout();
+      }
+    };
+
+    const initialTimeout = setTimeout(() => {
+      if (!requestOccurred) {
+        page.off('request', onRequest);
+        cleanupListeners();
+        reject(new Error(`No hCaptcha request occurred within ${Math.round(waitMs / 1000)} seconds.`));
+      } else {
+        resetTimeout();
+      }
+    }, waitMs);
+
+    page.on('request', onRequest);
+    page.on('requestfinished', onRequestFinished);
+    page.on('requestfailed', onRequestFinished);
+
+    page.on('request', (request: { url: () => string }) => {
+      if (urlPattern.test(request.url())) {
+        clearTimeout(initialTimeout);
+      }
+    });
+
+    const onAbort = () => {
+      cleanupListeners();
+      clearTimeout(initialTimeout);
+      if (timeoutHandle)
+        clearTimeout(timeoutHandle);
+      signal.removeEventListener('abort', onAbort);
+      reject(new Error('AbortError'));
+    };
+
+    signal.addEventListener('abort', onAbort, { once: true });
+  }); 
+}
+
+export const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+}
